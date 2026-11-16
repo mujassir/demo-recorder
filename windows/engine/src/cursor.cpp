@@ -41,9 +41,13 @@ void CursorSampler::run() {
       double x = (ci.ptScreenPos.x - monitor_.left) * scale_x_;
       double y = (ci.ptScreenPos.y - monitor_.top) * scale_y_;
       uint32_t buttons = 0;
-      // GetAsyncKeyState reports logical buttons (honours swapped buttons).
-      if (GetAsyncKeyState(VK_LBUTTON) & 0x8000) buttons |= dr::kButtonLeft;
-      if (GetAsyncKeyState(VK_RBUTTON) & 0x8000) buttons |= dr::kButtonRight;
+      // GetAsyncKeyState reports physical buttons; map them to logical
+      // (primary/secondary) ones so swapped buttons record correctly.
+      const bool swapped = GetSystemMetrics(SM_SWAPBUTTON) != 0;
+      const int primary = swapped ? VK_RBUTTON : VK_LBUTTON;
+      const int secondary = swapped ? VK_LBUTTON : VK_RBUTTON;
+      if (GetAsyncKeyState(primary) & 0x8000) buttons |= dr::kButtonLeft;
+      if (GetAsyncKeyState(secondary) & 0x8000) buttons |= dr::kButtonRight;
       if (GetAsyncKeyState(VK_MBUTTON) & 0x8000) buttons |= dr::kButtonMiddle;
       recorder_.push_cursor(now, x, y, 0, buttons);
 

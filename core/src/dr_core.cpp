@@ -1,6 +1,7 @@
 #include "dr/dr_core.h"
 
 #include <memory>
+#include <exception>
 #include <new>
 #include <string>
 
@@ -48,7 +49,7 @@ dr::SourceKind to_kind(dr_source_kind k) {
 
 bool valid_kind(int k) { return k >= DR_SOURCE_SCREEN && k <= DR_SOURCE_EVENTS; }
 
-dr_status add_source(dr_project* p, dr::Source s) {
+dr_status add_source(dr_project* p, dr::Source s) try {
   if (s.id.empty()) return fail(DR_ERR_INVALID_ARGUMENT, "source id is empty");
   if (!dr::is_safe_relative_path(s.file)) {
     return fail(DR_ERR_INVALID_ARGUMENT, "source file must be a relative path inside the project");
@@ -56,6 +57,8 @@ dr_status add_source(dr_project* p, dr::Source s) {
   if (p->project.find_source(s.id)) return fail(DR_ERR_INVALID_ARGUMENT, "duplicate source id");
   p->project.sources.push_back(std::move(s));
   return ok();
+} catch (const std::exception& e) {
+  return fail(DR_ERR_IO, e.what());
 }
 
 }  // namespace
@@ -77,7 +80,7 @@ const char* dr_clock_domain(void) {
 }
 
 dr_project* dr_project_create(const char* platform, const char* app_version,
-                              const char* os_version, int64_t epoch_host_ns) {
+                              const char* os_version, int64_t epoch_host_ns) try {
   auto* p = new (std::nothrow) dr_project;
   if (!p) return nullptr;
   dr::AppInfo app;
@@ -88,6 +91,9 @@ dr_project* dr_project_create(const char* platform, const char* app_version,
   p->project = dr::make_project(std::move(app), std::move(clock));
   ok();
   return p;
+} catch (const std::exception& e) {
+  fail(DR_ERR_IO, e.what());
+  return nullptr;
 }
 
 void dr_project_free(dr_project* project) { delete project; }
@@ -97,7 +103,7 @@ const char* dr_project_id(const dr_project* project) {
 }
 
 dr_status dr_project_add_display(dr_project* project, const char* display_id, int32_t width_px,
-                                 int32_t height_px, double scale, double refresh_hz) {
+                                 int32_t height_px, double scale, double refresh_hz) try {
   if (!project || !display_id || !*display_id) return fail(DR_ERR_INVALID_ARGUMENT, "invalid display");
   if (width_px <= 0 || height_px <= 0 || !(scale > 0)) {
     return fail(DR_ERR_INVALID_ARGUMENT, "invalid display size");
@@ -105,6 +111,8 @@ dr_status dr_project_add_display(dr_project* project, const char* display_id, in
   project->project.displays.push_back(
       dr::Display{display_id, width_px, height_px, scale, refresh_hz > 0 ? refresh_hz : 0.0});
   return ok();
+} catch (const std::exception& e) {
+  return fail(DR_ERR_IO, e.what());
 }
 
 dr_status dr_project_add_video_source(dr_project* project, const char* source_id,
@@ -169,14 +177,16 @@ void dr_project_mark_complete(dr_project* project) {
   if (project) project->project.state = dr::ProjectState::Complete;
 }
 
-dr_status dr_project_save(const dr_project* project, const char* dir) {
+dr_status dr_project_save(const dr_project* project, const char* dir) try {
   if (!project || !dir) return fail(DR_ERR_INVALID_ARGUMENT, "invalid argument");
   std::string error;
   if (!dr::save_project(project->project, dir, &error)) return fail(DR_ERR_IO, error);
   return ok();
+} catch (const std::exception& e) {
+  return fail(DR_ERR_IO, e.what());
 }
 
-dr_project* dr_project_load(const char* dir) {
+dr_project* dr_project_load(const char* dir) try {
   if (!dir) {
     fail(DR_ERR_INVALID_ARGUMENT, "invalid argument");
     return nullptr;
@@ -192,6 +202,9 @@ dr_project* dr_project_load(const char* dir) {
   p->project = std::move(*loaded);
   ok();
   return p;
+} catch (const std::exception& e) {
+  fail(DR_ERR_FORMAT, e.what());
+  return nullptr;
 }
 
 int64_t dr_project_duration_ns(const dr_project* project) {
@@ -207,14 +220,20 @@ dr_input_recorder* dr_input_recorder_start(const char* dir, int64_t epoch_host_n
     fail(DR_ERR_INVALID_ARGUMENT, "invalid argument");
     return nullptr;
   }
-  auto r = std::make_unique<dr_input_recorder>(epoch_host_ns);
-  std::string error;
-  if (!r->recorder.start(dir, &error)) {
-    fail(DR_ERR_IO, error);
+  try {
+    auto r = std::make_unique<dr_input_recorder>(epoch_host_ns);
+    std::string error;
+    if (!r->recorder.start(dir, &error)) {
+      fail(DR_ERR_IO, error);
+      return nullptr;
+    }
+    ok();
+    return r.release();
+  } catch (const std::exception& e) {
+    // Never let a C++ exception cross the C ABI (thread creation, allocation).
+    fail(DR_ERR_IO, e.what());
     return nullptr;
   }
-  ok();
-  return r.release();
 }
 
 void dr_input_recorder_push_cursor(dr_input_recorder* recorder, int64_t host_ns, double x,
@@ -249,13 +268,15 @@ dr_status dr_input_recorder_stop(dr_input_recorder* recorder) {
   return ok();
 }
 
-dr_status dr_recover_row_log(const char* path, uint64_t* rows_kept) {
+dr_status dr_recover_row_log(const char* path, uint64_t* rows_kept) try {
   if (!path) return fail(DR_ERR_INVALID_ARGUMENT, "invalid argument");
   std::string error;
   auto r = dr::recover_row_log(path, &error);
   if (!r) return fail(DR_ERR_FORMAT, error);
   if (rows_kept) *rows_kept = r->rows_kept;
   return ok();
+} catch (const std::exception& e) {
+  return fail(DR_ERR_IO, e.what());
 }
 
 }  // extern "C"

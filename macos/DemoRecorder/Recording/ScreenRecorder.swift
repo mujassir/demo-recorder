@@ -14,6 +14,8 @@ struct ScreenRecorderStats: Sendable {
   var framesOtherStatus = 0
   var firstFrameHostNs: Int64?
   var lastFrameHostNs: Int64?
+  /// Where the video ends: when stop was requested, or the last frame if later.
+  var endHostNs: Int64?
 }
 
 struct ScreenRecorderConfiguration: Sendable {
@@ -43,6 +45,7 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
   private let input: AVAssetWriterInput
   private var stream: SCStream?
   private var sessionStarted = false
+  private var lastPTS = CMTime.invalid
   private var stopped = false
   private var stats = ScreenRecorderStats()
 
@@ -122,6 +125,9 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
 
   /// Stops capture and finalizes the file. Returns frame statistics.
   func stop() async throws -> ScreenRecorderStats {
+    // ScreenCaptureKit only delivers changed frames, so a static screen at
+    // the end sends nothing; end the movie at the stop time, not the last frame.
+    let stopTime = CMClockGetTime(CMClockGetHostTimeClock())
     let stream = queue.sync { self.stream }
     if let stream {
       do {
@@ -131,15 +137,20 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
       }
     }
     // After this no callback can append, so the writer is ours alone.
-    let (started, finalStats) = queue.sync { () -> (Bool, ScreenRecorderStats) in
+    let (started, lastPTS, capturedStats) = queue.sync { () -> (Bool, CMTime, ScreenRecorderStats) in
       self.stopped = true
       self.stream = nil
-      return (self.sessionStarted, self.stats)
+      return (self.sessionStarted, self.lastPTS, self.stats)
     }
+    var finalStats = capturedStats
     guard started else {
       writer.cancelWriting()
       throw CoreError(message: "No frames were captured. Check the Screen Recording permission.")
     }
+    let endTime = lastPTS.isValid ? CMTimeMaximum(stopTime, lastPTS) : stopTime
+    // Holds the last frame on screen until the end time.
+    writer.endSession(atSourceTime: endTime)
+    finalStats.endHostNs = Core.hostTimeToNs(endTime)
     input.markAsFinished()
     await writer.finishWriting()
     if writer.status == .failed {
@@ -185,6 +196,7 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
     if input.append(sampleBuffer) {
       stats.framesWritten += 1
       stats.lastFrameHostNs = hostNs
+      lastPTS = pts
     } else {
       stats.framesAppendFailed += 1
     }

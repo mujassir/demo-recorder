@@ -58,7 +58,7 @@ final class RecordingSession {
     let epoch = Core.nowNs()
 
     let project = try CoreProject(appVersion: Bundle.main.shortVersion,
-                                  osVersion: ProcessInfo.processInfo.operatingSystemVersionString,
+                                  osVersion: Self.osVersion,
                                   epochHostNs: epoch)
     let displayKey = String(options.displayID)
     try project.addDisplay(id: displayKey, widthPx: display.pixelWidth, heightPx: display.pixelHeight,
@@ -95,19 +95,38 @@ final class RecordingSession {
   }
 
   func stop() async throws -> RecordingSummary {
-    let screenStats = try await screen.stop()
+    let stopNs = Core.nowNs()
+    // Every source is stopped and every file closed even if one step fails;
+    // the first error is rethrown at the end.
+    var firstError: Error?
+    var screenStats = ScreenRecorderStats()
+    do {
+      screenStats = try await screen.stop()
+    } catch {
+      firstError = error
+    }
     cursor.stop()
     let inputStats = input.stats()
-    try input.stop()
+    do {
+      try input.stop()
+    } catch {
+      firstError = firstError ?? error
+    }
 
-    let lastNs = screenStats.lastFrameHostNs ?? Core.nowNs()
-    let duration = max(0, lastNs - epochNs)
+    let endNs = max(stopNs, screenStats.endHostNs ?? stopNs, screenStats.lastFrameHostNs ?? stopNs)
+    let duration = max(0, endNs - epochNs)
     if let first = screenStats.firstFrameHostNs {
-      try project.setSourceStart(id: "screen", offsetNs: first - epochNs)
+      try? project.setSourceStart(id: "screen", offsetNs: first - epochNs)
     }
     project.setDuration(ns: duration)
-    project.markComplete()
-    try project.save(to: folder)
+    // A failed recording keeps state "recording" so recovery can find it.
+    if firstError == nil { project.markComplete() }
+    do {
+      try project.save(to: folder)
+    } catch {
+      firstError = firstError ?? error
+    }
+    if let firstError { throw firstError }
 
     return RecordingSummary(folder: folder, durationNs: duration, screen: screenStats,
                             cursorRows: inputStats.cursor_rows, eventRows: inputStats.event_rows,
@@ -115,6 +134,13 @@ final class RecordingSession {
   }
 
   // MARK: Helpers
+
+  /// "14.5" or "14.5.1", matching the plain version Windows stores.
+  private static var osVersion: String {
+    let v = ProcessInfo.processInfo.operatingSystemVersion
+    return v.patchVersion == 0 ? "\(v.majorVersion).\(v.minorVersion)"
+      : "\(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
+  }
 
   /// ~0.12 bits per pixel per frame: 1080p60 ≈ 15 Mbit/s ≈ 6.7 GB/hour, inside
   /// the 8 GB/hour budget while staying visually lossless for UI content.

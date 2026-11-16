@@ -127,8 +127,9 @@ defensively:
 - Bounded input size and nesting depth, strict JSON grammar, and UTF-8
   validation; integers keep exact int64 values.
 - File names must be relative paths inside the project folder: no absolute
-  paths, `..`, `.`, empty segments, backslashes, drive letters or control
-  characters.
+  paths, `..`, `.`, empty segments, backslashes, `:` (drive letters and NTFS
+  alternate data streams), control characters, Windows device names (`CON`,
+  `NUL`, `COM1`, ...), or segments ending in a dot or space.
 - Every numeric field is range-checked, and errors name the field, for example
   `$.sources[1].file: unsafe path`.
 - The JSON, project and row-log parsers are fuzzed in CI (`core/fuzz/`).

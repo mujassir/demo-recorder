@@ -7,6 +7,13 @@
 #include <fstream>
 #include <system_error>
 
+#if defined(_WIN32)
+#include <io.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
 namespace dr {
 
 namespace fs = std::filesystem;
@@ -55,24 +62,50 @@ std::optional<std::string> read_file(const std::string& path, size_t max_bytes,
   return data;
 }
 
+namespace {
+
+std::FILE* open_for_write(const fs::path& p) {
+#if defined(_WIN32)
+  return _wfopen(p.c_str(), L"wb");
+#else
+  return std::fopen(p.c_str(), "wb");
+#endif
+}
+
+// Forces file data to stable storage, so a rename that survives a power loss
+// never points at an empty or partial file.
+bool sync_file(std::FILE* f) {
+#if defined(_WIN32)
+  return _commit(_fileno(f)) == 0;
+#elif defined(__APPLE__)
+  // fsync on macOS only reaches the drive cache; F_FULLFSYNC flushes it.
+  return fcntl(fileno(f), F_FULLFSYNC) == 0 || fsync(fileno(f)) == 0;
+#else
+  return fsync(fileno(f)) == 0;
+#endif
+}
+
+}  // namespace
+
 bool write_file_atomic(const std::string& path, std::string_view contents, std::string* error) {
   fs::path target = to_path(path);
   fs::path tmp = target;
   tmp += ".tmp";
-  {
-    std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-    if (!out) {
-      if (error) *error = path + ": cannot open for writing";
-      return false;
-    }
-    out.write(contents.data(), static_cast<std::streamsize>(contents.size()));
-    out.flush();
-    if (!out) {
-      if (error) *error = path + ": write failed";
-      return false;
-    }
+  std::FILE* f = open_for_write(tmp);
+  if (!f) {
+    if (error) *error = path + ": cannot open for writing";
+    return false;
   }
+  bool ok = std::fwrite(contents.data(), 1, contents.size(), f) == contents.size();
+  ok = std::fflush(f) == 0 && ok;
+  ok = ok && sync_file(f);
+  ok = std::fclose(f) == 0 && ok;
   std::error_code ec;
+  if (!ok) {
+    if (error) *error = path + ": write failed";
+    fs::remove(tmp, ec);
+    return false;
+  }
   // fs::rename replaces an existing target on POSIX and Windows.
   fs::rename(tmp, target, ec);
   if (ec) {

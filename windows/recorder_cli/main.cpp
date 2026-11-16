@@ -48,22 +48,29 @@ int wmain(int argc, wchar_t** argv) {
   drwin::RecordOptions options;
   double seconds = 0;
   bool list = false;
-  for (int i = 1; i < argc; ++i) {
-    std::wstring a = argv[i];
-    auto next = [&]() -> std::wstring {
-      if (i + 1 >= argc) {
-        std::exit(usage());
-      }
-      return argv[++i];
-    };
-    if (a == L"--seconds") seconds = std::stod(next());
-    else if (a == L"--monitor") options.monitor_index = std::stoi(next());
-    else if (a == L"--fps") options.fps = static_cast<uint32_t>(std::stoul(next()));
-    else if (a == L"--max-height") options.max_height = static_cast<uint32_t>(std::stoul(next()));
-    else if (a == L"--output") options.library = next();
-    else if (a == L"--list-monitors") list = true;
-    else return usage();
+  try {
+    for (int i = 1; i < argc; ++i) {
+      std::wstring a = argv[i];
+      auto next = [&]() -> std::wstring {
+        if (i + 1 >= argc) {
+          std::exit(usage());
+        }
+        return argv[++i];
+      };
+      if (a == L"--seconds") seconds = std::stod(next());
+      else if (a == L"--monitor") options.monitor_index = std::stoi(next());
+      else if (a == L"--fps") options.fps = static_cast<uint32_t>(std::stoul(next()));
+      else if (a == L"--max-height") options.max_height = static_cast<uint32_t>(std::stoul(next()));
+      else if (a == L"--output") options.library = next();
+      else if (a == L"--list-monitors") list = true;
+      else return usage();
+    }
+  } catch (const std::exception&) {
+    // std::stod / std::stoi / std::stoul throw on non-numeric or out-of-range values.
+    return usage();
   }
+  // std::stoul accepts "-1" and wraps it, so range-check after parsing.
+  if (seconds < 0 || options.fps == 0 || options.fps > 240) return usage();
 
   winrt::init_apartment(winrt::apartment_type::multi_threaded);
   if (FAILED(MFStartup(MF_VERSION))) {

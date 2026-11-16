@@ -16,7 +16,7 @@ namespace {
 // sample that wraps it (IMFTrackedSample). Only then may the converter
 // overwrite the texture.
 struct SlotReleaser : winrt::implements<SlotReleaser, IMFAsyncCallback> {
-  explicit SlotReleaser(Nv12Pool& pool) : pool(pool) {}
+  explicit SlotReleaser(std::shared_ptr<Nv12Pool> pool) : pool(std::move(pool)) {}
 
   HRESULT STDMETHODCALLTYPE GetParameters(DWORD*, DWORD*) override { return E_NOTIMPL; }
 
@@ -26,7 +26,7 @@ struct SlotReleaser : winrt::implements<SlotReleaser, IMFAsyncCallback> {
       // State is an IMFAttributes object carrying the slot index.
       if (auto attrs = state.try_as<IMFAttributes>()) {
         UINT32 slot = 0;
-        if (SUCCEEDED(attrs->GetUINT32(kSlotKey, &slot))) pool.release(static_cast<int>(slot));
+        if (SUCCEEDED(attrs->GetUINT32(kSlotKey, &slot))) pool->release(static_cast<int>(slot));
       }
     }
     return S_OK;
@@ -34,7 +34,8 @@ struct SlotReleaser : winrt::implements<SlotReleaser, IMFAsyncCallback> {
 
   // {6B1F0E4C-2B7A-4C0E-9E57-6F3A1D2C9B11}
   static constexpr GUID kSlotKey = {0x6b1f0e4c, 0x2b7a, 0x4c0e, {0x9e, 0x57, 0x6f, 0x3a, 0x1d, 0x2c, 0x9b, 0x11}};
-  Nv12Pool& pool;
+  // Owning reference: keeps the textures alive until the last sample goes.
+  std::shared_ptr<Nv12Pool> pool;
 };
 
 void set_codec_value(ICodecAPI* api, const GUID& key, ULONG value) {
@@ -55,8 +56,8 @@ void set_codec_bool(ICodecAPI* api, const GUID& key, bool value) {
 
 }  // namespace
 
-Encoder::Encoder(const GpuDevice& gpu, Nv12Pool& pool, const EncoderConfig& config)
-    : gpu_(gpu), pool_(pool), config_(config), queue_(64) {
+Encoder::Encoder(const GpuDevice& gpu, std::shared_ptr<Nv12Pool> pool, const EncoderConfig& config)
+    : gpu_(gpu), pool_(std::move(pool)), config_(config), queue_(64) {
   winrt::check_hresult(MFCreateDXGIDeviceManager(&reset_token_, device_manager_.put()));
   winrt::check_hresult(device_manager_->ResetDevice(gpu_.device.get(), reset_token_));
 
@@ -158,7 +159,7 @@ void Encoder::write(const Frame& f) {
   winrt::com_ptr<IMFMediaBuffer> buffer;
   winrt::com_ptr<IMFTrackedSample> tracked;
   winrt::com_ptr<IMFSample> sample;
-  HRESULT hr = MFCreateDXGISurfaceBuffer(__uuidof(ID3D11Texture2D), pool_.texture(f.slot), 0, FALSE, buffer.put());
+  HRESULT hr = MFCreateDXGISurfaceBuffer(__uuidof(ID3D11Texture2D), pool_->texture(f.slot), 0, FALSE, buffer.put());
   if (SUCCEEDED(hr)) {
     DWORD length = 0;
     if (auto b2 = buffer.try_as<IMF2DBuffer>(); b2 && SUCCEEDED(b2->GetContiguousLength(&length))) {
@@ -178,7 +179,7 @@ void Encoder::write(const Frame& f) {
     hr = tracked->SetAllocator(release_callback_.get(), state.get());
   }
   if (FAILED(hr)) {
-    pool_.release(f.slot);
+    pool_->release(f.slot);
     failures_.fetch_add(1);
     return;
   }

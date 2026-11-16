@@ -11,6 +11,7 @@
 #include "cursor.h"
 #include "dr/clock.h"
 #include "dr/file_util.h"
+#include "dr/frame_pacer.h"
 #include "dr/input_log.h"
 #include "dr/json.h"
 #include "dr/project.h"
@@ -105,18 +106,17 @@ struct Recorder::Impl {
   int64_t epoch_ns = 0;
   uint32_t width = 0;
   uint32_t height = 0;
-  int64_t min_frame_interval_ns = 0;
+  dr::FramePacer pacer{60};
 
   dr::Project project;
   std::unique_ptr<dr::InputRecorder> input;
   std::unique_ptr<CursorSampler> cursor;
-  std::unique_ptr<Nv12Pool> pool;
+  std::shared_ptr<Nv12Pool> pool;
   std::unique_ptr<Nv12Converter> converter;
   std::unique_ptr<Encoder> encoder;
   std::unique_ptr<ScreenCapture> capture;
 
   // Touched only on the capture callback thread.
-  int64_t last_accepted_ns = -1;
   std::atomic<uint64_t> skipped_rate{0};
   std::atomic<uint64_t> dropped_busy{0};
   std::atomic<uint64_t> failed{0};
@@ -124,7 +124,7 @@ struct Recorder::Impl {
 
   void on_frame(ID3D11Texture2D* bgra, int64_t host_ns) {
     if (host_ns < epoch_ns) return;  // in flight before recording time 0
-    if (last_accepted_ns >= 0 && host_ns - last_accepted_ns < min_frame_interval_ns) {
+    if (!pacer.accept(host_ns)) {
       skipped_rate.fetch_add(1, std::memory_order_relaxed);
       return;
     }
@@ -145,7 +145,6 @@ struct Recorder::Impl {
       dropped_busy.fetch_add(1, std::memory_order_relaxed);
       return;
     }
-    last_accepted_ns = host_ns;
   }
 };
 
@@ -177,7 +176,7 @@ void Recorder::start() {
 
   d.gpu = create_gpu_device();
   const uint32_t fps = std::clamp<uint32_t>(d.options.fps, 1, 240);
-  d.min_frame_interval_ns = 1'000'000'000LL / fps - 1'000'000'000LL / fps / 4;
+  d.pacer = dr::FramePacer(fps);
 
   d.capture = std::make_unique<ScreenCapture>(d.gpu, d.monitor.handle,
                                               [&d](ID3D11Texture2D* tex, int64_t ns) { d.on_frame(tex, ns); });
@@ -188,7 +187,7 @@ void Recorder::start() {
   d.folder = make_project_folder(library);
   d.folder_utf8 = to_utf8(d.folder);
 
-  d.pool = std::make_unique<Nv12Pool>(d.gpu.device.get(), d.width, d.height, 8);
+  d.pool = std::make_shared<Nv12Pool>(d.gpu.device.get(), d.width, d.height, 8);
   d.converter = std::make_unique<Nv12Converter>(d.gpu, *d.pool, fps);
   EncoderConfig ec;
   ec.path = (std::filesystem::path(d.folder) / L"screen.mp4").wstring();
@@ -196,7 +195,7 @@ void Recorder::start() {
   ec.height = d.height;
   ec.fps = fps;
   ec.bitrate = bitrate;
-  d.encoder = std::make_unique<Encoder>(d.gpu, *d.pool, ec);
+  d.encoder = std::make_unique<Encoder>(d.gpu, d.pool, ec);
 
   // Recording time 0. P1 moves this to the end of the 3-second countdown.
   d.epoch_ns = dr::MasterClock::now_ns();
@@ -248,6 +247,10 @@ RecordSummary Recorder::stop() {
   auto input_stats = d.input->stats();
   bool input_ok = d.input->stop();
 
+  // The recording lasts until the user pressed stop, even if the screen was
+  // static at the end and no frame arrived (WGC only delivers changes).
+  const int64_t stop_ns = dr::MasterClock::now_ns();
+
   RecordSummary s;
   s.folder = d.folder;
   s.width = d.width;
@@ -268,14 +271,15 @@ RecordSummary Recorder::stop() {
 
   const int64_t first = d.encoder->first_frame_host_ns();
   const int64_t last = d.encoder->last_frame_host_ns();
-  s.duration_ns = last >= 0 ? last - d.epoch_ns : dr::MasterClock::now_ns() - d.epoch_ns;
+  s.duration_ns = std::max(stop_ns, last) - d.epoch_ns;
   for (auto& src : d.project.sources) {
     if (src.id == "screen" && first >= 0) src.start_offset_ns = first - d.epoch_ns;
   }
   d.project.duration_ns = std::max<int64_t>(0, s.duration_ns);
   d.project.state = dr::ProjectState::Complete;
 
-  // Release GPU objects in dependency order (encoder samples reference the pool).
+  // Release GPU objects. Samples still held by Media Foundation keep the
+  // pool alive through their release callback, so the order is not critical.
   d.capture.reset();
   d.encoder.reset();
   d.converter.reset();

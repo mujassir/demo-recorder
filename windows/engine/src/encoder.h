@@ -38,7 +38,9 @@ struct EncoderStats {
 
 class Encoder {
  public:
-  Encoder(const GpuDevice& gpu, Nv12Pool& pool, const EncoderConfig& config);
+  // The pool is shared: Media Foundation can release a sample (and so a
+  // slot) after the encoder and its owner are gone.
+  Encoder(const GpuDevice& gpu, std::shared_ptr<Nv12Pool> pool, const EncoderConfig& config);
   ~Encoder();
   Encoder(const Encoder&) = delete;
   Encoder& operator=(const Encoder&) = delete;
@@ -66,7 +68,7 @@ class Encoder {
   void describe_encoder();
 
   GpuDevice gpu_;
-  Nv12Pool& pool_;
+  std::shared_ptr<Nv12Pool> pool_;
   EncoderConfig config_;
   UINT reset_token_ = 0;
   winrt::com_ptr<IMFDXGIDeviceManager> device_manager_;

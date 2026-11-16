@@ -179,20 +179,49 @@ Project make_project(AppInfo app, ClockInfo clock) {
   return p;
 }
 
+namespace {
+
+// Windows opens these as devices in any folder, with or without an extension.
+bool is_windows_device_name(std::string_view segment) {
+  std::string_view stem = segment.substr(0, segment.find('.'));
+  auto ieq = [](std::string_view a, std::string_view b) {
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); ++i) {
+      char c = a[i];
+      if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
+      if (c != b[i]) return false;
+    }
+    return true;
+  };
+  for (std::string_view name : {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}) {
+    if (ieq(stem, name)) return true;
+  }
+  if (stem.size() == 4 && (ieq(stem.substr(0, 3), "COM") || ieq(stem.substr(0, 3), "LPT")) &&
+      stem[3] >= '0' && stem[3] <= '9') {
+    return true;
+  }
+  return false;
+}
+
+}  // namespace
+
 bool is_safe_relative_path(std::string_view path) {
   if (path.empty() || path.size() > 255) return false;
+  for (char c : path) {
+    // ':' covers drive letters and NTFS alternate data streams.
+    if (c == '\\' || c == ':' || static_cast<unsigned char>(c) < 0x20) return false;
+  }
   if (path.front() == '/') return false;
-  if (path.size() >= 2 && path[1] == ':') return false;  // C:foo
   size_t start = 0;
   while (start <= path.size()) {
     size_t end = path.find('/', start);
     if (end == std::string_view::npos) end = path.size();
     std::string_view part = path.substr(start, end - start);
     if (part.empty() || part == "." || part == "..") return false;
+    // Windows silently strips trailing dots and spaces, so "a." aliases "a".
+    if (part.back() == '.' || part.back() == ' ') return false;
+    if (is_windows_device_name(part)) return false;
     start = end + 1;
-  }
-  for (char c : path) {
-    if (c == '\\' || c == '\0' || static_cast<unsigned char>(c) < 0x20) return false;
   }
   return true;
 }

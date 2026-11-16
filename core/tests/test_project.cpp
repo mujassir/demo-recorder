@@ -154,4 +154,15 @@ TEST(project_safe_paths) {
   CHECK(!is_safe_relative_path("a/"));
   CHECK(!is_safe_relative_path("a\\b"));
   CHECK(!is_safe_relative_path("D:x"));
+  // NTFS alternate data streams and Windows device names.
+  CHECK(!is_safe_relative_path("screen.mp4:hidden"));
+  CHECK(!is_safe_relative_path("cursors/CON"));
+  CHECK(!is_safe_relative_path("nul.txt"));
+  CHECK(!is_safe_relative_path("Com1.png"));
+  CHECK(!is_safe_relative_path("lpt9"));
+  CHECK(!is_safe_relative_path("screen.mp4."));
+  CHECK(!is_safe_relative_path("cursors /a"));
+  CHECK(is_safe_relative_path("console.json"));
+  CHECK(is_safe_relative_path("com10.png"));
+  CHECK(is_safe_relative_path("cursors/12.png"));
 }

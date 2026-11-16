@@ -29,6 +29,7 @@ if(DR_BUILD_TESTS)
     tests/main.cpp
     tests/test_c_api.cpp
     tests/test_clock.cpp
+    tests/test_frame_pacer.cpp
     tests/test_input_log.cpp
     tests/test_json.cpp
     tests/test_project.cpp
