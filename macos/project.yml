@@ -29,9 +29,7 @@ targets:
       # The shared core is compiled straight into the app; Swift imports its C
       # API as the DRCore module (core/include/module.modulemap).
       - path: ../core/src
-        group: Core
       - path: ../core/include
-        group: Core
         buildPhase: none
     settings:
       base:

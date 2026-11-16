@@ -27,8 +27,8 @@ private func check(_ status: dr_status) throws {
   if status != DR_OK { throw CoreError(message: Core.lastError) }
 }
 
-/// project.json for one recording. Confined to the main actor.
-@MainActor
+/// project.json for one recording. Not thread-safe: the owning
+/// RecordingSession keeps it on the main actor.
 final class CoreProject {
   private let handle: OpaquePointer
 
