@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    name: Core (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2022]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDR_BUILD_WINDOWS_APP=OFF
+      - name: Build
+        run: cmake --build build --config Release --parallel
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+  fuzz:
+    name: Core fuzzing (60 s per parser)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build fuzzers
+        run: |
+          CC=clang CXX=clang++ cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DDR_BUILD_FUZZERS=ON
+          cmake --build build --parallel
+      - name: Unit tests under ASan/UBSan
+        run: ctest --test-dir build --output-on-failure
+      - name: Fuzz
+        run: |
+          for t in json project cursor_log; do
+            mkdir -p corpus/$t
+            cp testdata/projects/v0-minimal/project.json corpus/$t/
+            ./build/core/fuzz_$t corpus/$t -max_total_time=60
+          done
+
+  macos-app:
+    name: macOS app
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        working-directory: macos
+        run: xcodegen generate
+      - name: Build
+        working-directory: macos
+        run: |
+          xcodebuild -project DemoRecorder.xcodeproj -scheme DemoRecorder -configuration Debug \
+            -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO build 2>&1 | tee build.log
+          exit ${PIPESTATUS[0]}
+      - name: List warnings
+        if: always()
+        working-directory: macos
+        run: grep -E "warning: " build.log | sort -u || true
+
+  windows-app:
+    name: Windows engine
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+      - name: Build
+        run: cmake --build build --config Release --parallel
+      - name: Test core
+        run: ctest --test-dir build -C Release --output-on-failure
+      - uses: actions/upload-artifact@v4
+        with:
+          name: drrec-windows-x64
+          path: build/windows/Release/drrec.exe

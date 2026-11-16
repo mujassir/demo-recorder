@@ -1,0 +1,49 @@
+# XcodeGen spec. Generate the Xcode project with:
+#   brew install xcodegen && xcodegen generate
+# The .xcodeproj is generated, not committed, so merges never conflict on it.
+name: DemoRecorder
+options:
+  bundleIdPrefix: com.demorecorder
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+  developmentLanguage: en
+
+settings:
+  base:
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    SWIFT_VERSION: "6.0"
+    CLANG_CXX_LANGUAGE_STANDARD: c++20
+    CLANG_CXX_LIBRARY: libc++
+    ENABLE_HARDENED_RUNTIME: YES
+    MARKETING_VERSION: 0.1.0
+    CURRENT_PROJECT_VERSION: 1
+    DEAD_CODE_STRIPPING: YES
+
+targets:
+  DemoRecorder:
+    type: application
+    platform: macOS
+    sources:
+      - path: DemoRecorder
+      # The shared core is compiled straight into the app; Swift imports its C
+      # API as the DRCore module (core/include/module.modulemap).
+      - path: ../core/src
+        group: Core
+      - path: ../core/include
+        group: Core
+        buildPhase: none
+    settings:
+      base:
+        PRODUCT_NAME: Demo Recorder
+        PRODUCT_BUNDLE_IDENTIFIER: com.demorecorder.mac
+        INFOPLIST_FILE: DemoRecorder/Support/Info.plist
+        CODE_SIGN_ENTITLEMENTS: DemoRecorder/Support/DemoRecorder.entitlements
+        CODE_SIGN_STYLE: Automatic
+        # Ad-hoc signing for local builds. Release builds use Developer ID +
+        # notarization (P4); set DEVELOPMENT_TEAM in a local xcconfig.
+        CODE_SIGN_IDENTITY: "-"
+        HEADER_SEARCH_PATHS: $(SRCROOT)/../core/include
+        SWIFT_INCLUDE_PATHS: $(SRCROOT)/../core/include
+        GCC_WARN_SHADOW: YES
+        OTHER_CPLUSPLUSFLAGS: $(inherited) -Wall -Wextra
