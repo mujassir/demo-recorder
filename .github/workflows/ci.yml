@@ -64,7 +64,8 @@ jobs:
       - name: List warnings
         if: always()
         working-directory: macos
-        run: grep -E "warning: " build.log | sort -u || true
+        run: |
+          grep -E "warning: " build.log | sort -u || true
 
   windows-app:
     name: Windows engine
