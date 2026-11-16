@@ -1,0 +1,24 @@
+# Build output
+/build*/
+/out/
+*.o
+*.obj
+
+# macOS / Xcode
+.DS_Store
+macos/DemoRecorder.xcodeproj/
+xcuserdata/
+DerivedData/
+*.xcuserstate
+
+# Windows / Visual Studio
+.vs/
+*.user
+*.aps
+x64/
+ARM64/
+
+# Fuzzing
+crash-*
+leak-*
+timeout-*

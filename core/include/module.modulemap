@@ -1,0 +1,4 @@
+module DRCore {
+  header "dr/dr_core.h"
+  export *
+}
